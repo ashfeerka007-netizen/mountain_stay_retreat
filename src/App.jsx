@@ -63,14 +63,17 @@ export default function StayFacilityWebsite() {
   const [bookingStep, setBookingStep] = useState(1); // 1: Check Availability, 2: Guest Details & Payment Method
   const [availabilityChecked, setAvailabilityChecked] = useState(false);
   const [checkingAvailability, setCheckingAvailability] = useState(false);
-  const [paymentOption, setPaymentOption] = useState('online'); // 'online' | 'counter'
+  const [paymentOption, setPaymentOption] = useState('counter'); // 'online' | 'counter'
   const [formData, setFormData] = useState({
     fullName: '',
     email: '',
+    countryCode: '+91',
+    phone: '',
     checkInDate: '',
     roomType: 'Suite Room (₹2,500/night)',
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [bookingError, setBookingError] = useState('');
   const [bookingConfirmation, setBookingConfirmation] = useState(null);
   const [availability, setAvailability] = useState({
     totalSuites: 5,
@@ -164,133 +167,114 @@ export default function StayFacilityWebsite() {
       .catch((err) => console.error('Failed to sync booking to backend:', err));
   };
 
+  const selectedAvailableCount = formData.roomType.includes('Suite')
+    ? availability.availableSuites
+    : availability.availableDormBeds;
+
+  const isSoldOut = selectedAvailableCount <= 0;
+
+  const validateGuestForm = () => {
+    if (!formData.fullName || formData.fullName.trim().length < 2) {
+      return 'Please enter your full name (minimum 2 characters).';
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!formData.email || !emailRegex.test(formData.email.trim())) {
+      return 'Please enter a valid email address (e.g. yourname@gmail.com).';
+    }
+    const rawDigits = (formData.phone || '').replace(/\D/g, '');
+    if (!formData.phone || rawDigits.length < 7) {
+      return 'Please enter a valid contact phone number with at least 7 digits.';
+    }
+    if (!formData.checkInDate) {
+      return 'Please select a valid check-in date.';
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const bookingDate = new Date(formData.checkInDate + 'T00:00:00');
+    if (bookingDate < today) {
+      return 'Check-in date cannot be in the past.';
+    }
+    if (isSoldOut) {
+      return 'Sorry, this accommodation is fully booked or under maintenance on the selected date.';
+    }
+    return null;
+  };
+
   const handleBookingSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.fullName || !formData.email || !formData.checkInDate) {
-      alert('Please fill in all required fields (Name, Email, Check-in Date)');
+    setBookingError('');
+
+    const validationError = validateGuestForm();
+    if (validationError) {
+      setBookingError(validationError);
+      alert(`⚠️ Validation Notice:\n${validationError}`);
       return;
     }
 
     setIsSubmitting(true);
-    const amount = roomAmounts[formData.roomType] || 2500;
+    const amount = roomAmounts[formData.roomType] || (formData.roomType.includes('Dormitory') ? dormPrice : suitePrice);
+    const fullPhone = formData.phone.startsWith('+')
+      ? formData.phone
+      : `${formData.countryCode || '+91'} ${formData.phone.trim()}`;
 
-    if (paymentOption === 'online') {
-      try {
-        const response = await fetch('http://localhost:5000/create-order', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ amount }),
-        });
-
-        const order = await response.json();
-
-        if (order && order.id && window.Razorpay) {
-          const options = {
-            key: import.meta.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_dummy',
-            amount: order.amount,
-            currency: order.currency || 'INR',
-            name: 'Mountain Stay Retreat',
-            description: `${formData.roomType} Booking Payment`,
-            order_id: order.id,
-            handler: function (res) {
-              const confirmation = {
-                id: generateRefId('MSR-RZP'),
-                bookingId: generateRefId('MSR-RZP'),
-                paymentId: res.razorpay_payment_id || generateRefId('PAY'),
-                name: formData.fullName,
-                email: formData.email,
-                date: formData.checkInDate,
-                roomType: formData.roomType,
-                paymentMethod: 'Online Pre-payment (Razorpay)',
-                status: 'Paid Online',
-                amount: amount,
-              };
-              saveOnlineBookingToBackend(confirmation);
-              setBookingConfirmation(confirmation);
-              setIsSubmitting(false);
-            },
-            prefill: {
-              name: formData.fullName,
-              email: formData.email,
-              contact: '9999999999',
-            },
-            theme: { color: '#2563eb' },
-          };
-          const razorpay = new window.Razorpay(options);
-          razorpay.open();
-        } else {
-          const confirmation = {
-            id: generateRefId('MSR-RZP'),
-            bookingId: generateRefId('MSR-RZP'),
-            paymentId: generateRefId('DEMO_PAY'),
-            name: formData.fullName,
-            email: formData.email,
-            date: formData.checkInDate,
-            roomType: formData.roomType,
-            paymentMethod: 'Online Pre-payment (Razorpay)',
-            status: 'Paid Online',
-            amount: amount,
-          };
-          saveOnlineBookingToBackend(confirmation);
-          setBookingConfirmation(confirmation);
-          setIsSubmitting(false);
-        }
-      } catch (error) {
-        console.error('Online Payment Error:', error);
-        const confirmation = {
-          id: generateRefId('MSR-RZP'),
-          bookingId: generateRefId('MSR-RZP'),
-          paymentId: generateRefId('PAY'),
-          name: formData.fullName,
-          email: formData.email,
+    try {
+      const res = await fetch('http://localhost:5000/book-counter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: formData.fullName.trim(),
+          email: formData.email.trim().toLowerCase(),
+          phone: fullPhone,
           date: formData.checkInDate,
           roomType: formData.roomType,
-          paymentMethod: 'Online Pre-payment (Razorpay)',
-          status: 'Paid Online',
-          amount: amount,
-        };
-        saveOnlineBookingToBackend(confirmation);
-        setBookingConfirmation(confirmation);
+        }),
+      });
+
+      const data = await res.json();
+
+      // Check server response status and success flag
+      if (!res.ok || !data.success) {
+        const errMsg = data.error || (Array.isArray(data.errors) ? data.errors.join('; ') : 'Booking reservation could not be verified by server.');
+        setBookingError(errMsg);
+        alert(`⚠️ Booking Reservation Rejected:\n${errMsg}`);
         setIsSubmitting(false);
+        return;
       }
-    } else {
-      try {
-        const res = await fetch('http://localhost:5000/book-counter', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: formData.fullName,
-            email: formData.email,
-            date: formData.checkInDate,
-            roomType: formData.roomType,
-          }),
-        });
-        const data = await res.json();
-        setBookingConfirmation({
-          bookingId: data.bookingId || generateRefId('MSR-CTR'),
-          name: formData.fullName,
-          email: formData.email,
-          date: formData.checkInDate,
-          roomType: formData.roomType,
-          paymentMethod: 'Pay at Counter / Property',
-          status: 'Pending at Check-in',
-          amount: amount,
-        });
-      } catch (err) {
-        console.error('Counter Booking Error:', err);
-        setBookingConfirmation({
-          bookingId: generateRefId('MSR-CTR'),
-          name: formData.fullName,
-          email: formData.email,
-          date: formData.checkInDate,
-          roomType: formData.roomType,
-          paymentMethod: 'Pay at Counter / Property',
-          status: 'Pending at Check-in',
-          amount: amount,
-        });
-      } finally {
-        setIsSubmitting(false);
-      }
+
+      // Successful server response
+      setBookingConfirmation({
+        bookingId: data.bookingId || data.details?.id || generateRefId('MSR-CTR'),
+        name: formData.fullName.trim(),
+        email: formData.email.trim(),
+        phone: fullPhone,
+        date: formData.checkInDate,
+        roomType: formData.roomType,
+        paymentMethod: 'Pay at Counter / Property',
+        status: 'Pending at Check-in',
+        amount: data.details?.amount || amount,
+        serverConfirmed: true,
+      });
+
+      // Refresh live availability
+      fetchAvailability(formData.checkInDate);
+    } catch (err) {
+      console.warn('Backend unavailable (using offline fallback confirmation):', err);
+      // Offline fallback when server is unreachable
+      const fallbackId = generateRefId('MSR-CTR');
+      setBookingConfirmation({
+        bookingId: fallbackId,
+        name: formData.fullName.trim(),
+        email: formData.email.trim(),
+        phone: fullPhone,
+        date: formData.checkInDate,
+        roomType: formData.roomType,
+        paymentMethod: 'Pay at Counter / Property',
+        status: 'Pending at Check-in (Offline Mode)',
+        amount: amount,
+        isOffline: true,
+      });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -302,12 +286,6 @@ export default function StayFacilityWebsite() {
       />
     );
   }
-
-  const selectedAvailableCount = formData.roomType.includes('Suite')
-    ? availability.availableSuites
-    : availability.availableDormBeds;
-
-  const isSoldOut = selectedAvailableCount <= 0;
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800">
@@ -596,6 +574,7 @@ export default function StayFacilityWebsite() {
                         }}
                         dateFormat="dd-MM-yyyy"
                         placeholderText="dd-mm-yyyy"
+                        minDate={new Date()}
                         required
                         className="w-full rounded-2xl border border-white/10 bg-slate-800/90 px-5 py-4 text-white outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                         wrapperClassName="w-full"
@@ -619,8 +598,12 @@ export default function StayFacilityWebsite() {
                       onChange={handleInputChange}
                       className="w-full rounded-2xl border border-white/10 bg-slate-800 px-5 py-4 text-white outline-none focus:border-blue-500"
                     >
-                      <option value="Suite Room (₹2,500/night)">Suite Room (₹2,500 / night)</option>
-                      <option value="Dormitory Bed (₹450/night)">Dormitory Bed (₹450 / night)</option>
+                      <option value="Suite Room (₹2,500/night)">
+                        Suite Room (₹{suitePrice.toLocaleString('en-IN')} / night)
+                      </option>
+                      <option value="Dormitory Bed (₹450/night)">
+                        Dormitory Bed (₹{dormPrice.toLocaleString('en-IN')} / night)
+                      </option>
                     </select>
                   </div>
 
@@ -718,130 +701,128 @@ export default function StayFacilityWebsite() {
                     />
                   </div>
 
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-300">
+                      Contact Number (Phone / WhatsApp) *
+                    </label>
+                    <div className="flex gap-2">
+                      {/* Country Code Selector */}
+                      <div className="relative shrink-0 w-36">
+                        <select
+                          name="countryCode"
+                          value={formData.countryCode || '+91'}
+                          onChange={handleInputChange}
+                          className="w-full appearance-none rounded-2xl border border-white/10 bg-white/10 px-3.5 py-3.5 text-xs font-semibold text-white outline-none focus:border-blue-500 cursor-pointer"
+                        >
+                          <option value="+91" className="bg-slate-800 text-white">🇮🇳 +91 (India)</option>
+                          <option value="+971" className="bg-slate-800 text-white">🇦🇪 +971 (UAE)</option>
+                          <option value="+966" className="bg-slate-800 text-white">🇸🇦 +966 (KSA)</option>
+                          <option value="+974" className="bg-slate-800 text-white">🇶🇦 +974 (Qatar)</option>
+                          <option value="+968" className="bg-slate-800 text-white">🇴🇲 +968 (Oman)</option>
+                          <option value="+965" className="bg-slate-800 text-white">🇰🇼 +965 (Kuwait)</option>
+                          <option value="+1" className="bg-slate-800 text-white">🇺🇸 +1 (USA/CA)</option>
+                          <option value="+44" className="bg-slate-800 text-white">🇬🇧 +44 (UK)</option>
+                          <option value="+65" className="bg-slate-800 text-white">🇸🇬 +65 (SG)</option>
+                          <option value="+61" className="bg-slate-800 text-white">🇦🇺 +61 (AU)</option>
+                        </select>
+                        <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs text-slate-400">
+                          ▼
+                        </div>
+                      </div>
+
+                      {/* Mobile Number Input */}
+                      <div className="relative flex-1">
+                        <input
+                          type="tel"
+                          name="phone"
+                          value={formData.phone}
+                          onChange={handleInputChange}
+                          placeholder="e.g. 98765 43210"
+                          maxLength="15"
+                          required
+                          className="w-full rounded-2xl border border-white/10 bg-white/10 px-5 py-3.5 text-white placeholder-slate-400 outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Summary Box */}
                   <div className="rounded-2xl border border-slate-700/80 bg-slate-800/90 p-4">
                     <div className="flex items-center justify-between text-xs text-slate-300">
                       <span>Payment Method:</span>
-                      <span className="font-bold text-blue-400">
-                        {paymentOption === 'online' ? '💳 Online Pre-payment' : '🏨 Pay at Counter'}
+                      <span className="font-bold text-emerald-400">
+                        🏨 Pay at Counter (Pay on Arrival)
                       </span>
                     </div>
                     <div className="mt-2 flex items-center justify-between border-t border-slate-700 pt-2 text-sm font-semibold">
-                      <span>Total Amount Due:</span>
+                      <span>Total Amount Due at Check-in:</span>
                       <span className="text-xl text-emerald-400">
                         ₹{(roomAmounts[formData.roomType] || 2500).toLocaleString('en-IN')}
                       </span>
                     </div>
                   </div>
 
+                  {bookingError && (
+                    <div className="rounded-2xl border border-rose-500/40 bg-rose-500/20 p-3.5 text-xs text-rose-300 font-semibold flex items-start gap-2">
+                      <span className="text-base shrink-0">⚠️</span>
+                      <span>{bookingError}</span>
+                    </div>
+                  )}
+
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className={`w-full rounded-2xl py-4 text-lg font-semibold shadow-lg transition duration-200 ${
-                      paymentOption === 'online'
-                        ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                        : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                    } ${isSubmitting ? 'opacity-75 cursor-not-allowed' : ''}`}
+                    className={`w-full rounded-2xl py-4 text-lg font-semibold shadow-lg transition duration-200 bg-emerald-600 hover:bg-emerald-700 text-white ${
+                      isSubmitting ? 'opacity-75 cursor-not-allowed' : ''
+                    }`}
                   >
                     {isSubmitting
-                      ? 'Launching Gateway...'
-                      : paymentOption === 'online'
-                      ? `💳 Proceed to Razorpay Gateway (Pay ₹${(roomAmounts[formData.roomType] || 2500).toLocaleString('en-IN')}) ➔`
-                      : `🏨 Confirm Reservation (Pay at Counter)`}
+                      ? 'Confirming Reservation...'
+                      : '🏨 Confirm Reservation (Pay at Counter)'}
                   </button>
                 </form>
               </div>
             )}
           </div>
 
-          {/* Right Column: Choose Payment Method */}
+          {/* Right Column: Payment Option */}
           {bookingStep === 2 && (
             <div className="flex flex-col justify-between rounded-3xl bg-white p-8 text-slate-800 shadow-2xl">
             <div>
               <div className="mb-6 flex items-center justify-between">
                 <div>
                   <h4 className="text-2xl font-bold">
-                    Choose Payment Option
+                    Payment Option
                   </h4>
                   <p className="text-sm text-slate-500">
-                    Payment gateway is given only after selecting Online Pre-payment
+                    Pay at Counter is currently active for all room reservations
                   </p>
                 </div>
-                <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
-                  {paymentOption === 'online' ? 'Online Gateway' : 'Pay at Counter'}
+                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  Pay on Arrival
                 </span>
               </div>
 
               <div className="space-y-4">
-                {/* Option 1: Online Pre-payment (Razorpay) */}
+                {/* Active Option: Pay at Counter */}
                 <div
-                  onClick={() => setPaymentOption('online')}
-                  className={`relative cursor-pointer rounded-2xl border-2 p-5 transition-all ${
-                    paymentOption === 'online'
-                      ? 'border-blue-600 bg-blue-50/60 shadow-md ring-2 ring-blue-600/20'
-                      : 'border-slate-200 bg-slate-50 hover:border-slate-300'
-                  }`}
+                  className="relative rounded-2xl border-2 border-emerald-600 bg-emerald-50/60 p-5 shadow-md ring-2 ring-emerald-600/20"
                 >
                   <div className="flex items-start gap-4">
-                    <div className={`mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${
-                      paymentOption === 'online' ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300'
-                    }`}>
-                      {paymentOption === 'online' && <span className="text-xs font-bold">✓</span>}
+                    <div className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-emerald-600 bg-emerald-600 text-white">
+                      <span className="text-xs font-bold">✓</span>
                     </div>
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
                         <h5 className="font-bold text-slate-900">
-                          💳 Online Pre-payment (Razorpay)
-                        </h5>
-                        <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700">
-                          Instant Confirmation
-                        </span>
-                      </div>
-                      <p className="mt-1 text-sm leading-relaxed text-slate-600">
-                        Select this to trigger the secure Razorpay payment gateway upon proceeding.
-                      </p>
-                      
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs font-medium text-slate-600">
-                        <span className="rounded-md bg-white px-2.5 py-1 border border-slate-200 shadow-2xs">
-                          ⚡ UPI (GPay / PhonePe / Paytm)
-                        </span>
-                        <span className="rounded-md bg-white px-2.5 py-1 border border-slate-200 shadow-2xs">
-                          💳 Debit & Credit Cards
-                        </span>
-                        <span className="rounded-md bg-white px-2.5 py-1 border border-slate-200 shadow-2xs">
-                          🏦 Net Banking
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Option 2: Pay at Counter */}
-                <div
-                  onClick={() => setPaymentOption('counter')}
-                  className={`relative cursor-pointer rounded-2xl border-2 p-5 transition-all ${
-                    paymentOption === 'counter'
-                      ? 'border-emerald-600 bg-emerald-50/60 shadow-md ring-2 ring-emerald-600/20'
-                      : 'border-slate-200 bg-slate-50 hover:border-slate-300'
-                  }`}
-                >
-                  <div className="flex items-start gap-4">
-                    <div className={`mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${
-                      paymentOption === 'counter' ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-300'
-                    }`}>
-                      {paymentOption === 'counter' && <span className="text-xs font-bold">✓</span>}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between">
-                        <h5 className="font-bold text-slate-900">
-                          🏨 Pay at Counter / Hotel
+                          🏨 Pay at Counter / Property
                         </h5>
                         <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-[11px] font-bold text-blue-700">
-                          Pay on Arrival
+                          Instant Booking
                         </span>
                       </div>
                       <p className="mt-1 text-sm leading-relaxed text-slate-600">
-                        Reserve your stay without advance payment. Pay cash, card, or UPI at the front desk upon check-in.
+                        Reserve your stay without advance online payment. Settle with cash or UPI at the front desk upon check-in.
                       </p>
 
                       <div className="mt-3 flex flex-wrap gap-2 text-xs font-medium text-slate-600">
@@ -849,9 +830,33 @@ export default function StayFacilityWebsite() {
                           💵 Cash at Desk
                         </span>
                         <span className="rounded-md bg-white px-2.5 py-1 border border-slate-200 shadow-2xs">
-                          💳 Card Machine / QR
+                          ⚡ UPI QR (GPay / PhonePe / Paytm)
                         </span>
                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Disabled Option: Online Pre-payment (Razorpay) */}
+                <div
+                  className="relative rounded-2xl border border-slate-200 bg-slate-50/80 p-5 opacity-60 cursor-not-allowed select-none"
+                >
+                  <div className="flex items-start gap-4">
+                    <div className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-slate-300 bg-slate-200 text-slate-400">
+                      <span className="text-xs font-bold">✕</span>
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between">
+                        <h5 className="font-semibold text-slate-500">
+                          💳 Online Pre-payment (Razorpay)
+                        </h5>
+                        <span className="rounded-full bg-slate-200 px-2.5 py-0.5 text-[11px] font-bold text-slate-500">
+                          Disabled / Coming Soon
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                        Online payment gateway backend is undergoing setup. Please book with Pay at Counter.
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -859,7 +864,7 @@ export default function StayFacilityWebsite() {
             </div>
 
             <div className="mt-6 rounded-2xl bg-slate-50 p-4 border border-slate-200/80 text-xs text-slate-500">
-              🔒 <strong>Process Guarantee:</strong> Availability is checked first. Payment gateway is given only after choosing Online Pre-payment.
+              🔒 <strong>Process Guarantee:</strong> Room reservation is confirmed immediately. Pay comfortably upon your arrival.
             </div>
           </div>
           )}
@@ -1044,6 +1049,10 @@ export default function StayFacilityWebsite() {
                 <span className="font-semibold text-slate-800">{bookingConfirmation.name}</span>
               </div>
               <div className="flex justify-between">
+                <span className="text-slate-500">Contact Number:</span>
+                <span className="font-semibold text-slate-800">{bookingConfirmation.phone || 'N/A'}</span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-slate-500">Check-in Date:</span>
                 <span className="font-semibold text-slate-800">{bookingConfirmation.date}</span>
               </div>
@@ -1067,22 +1076,64 @@ export default function StayFacilityWebsite() {
               </div>
             </div>
 
-            <button
-              onClick={() => {
-                setBookingConfirmation(null);
-                setBookingStep(1);
-                setAvailabilityChecked(false);
-                setFormData({
-                  fullName: '',
-                  email: '',
-                  checkInDate: '',
-                  roomType: 'Suite Room (₹2,500/night)',
-                });
-              }}
-              className="w-full rounded-2xl bg-slate-900 py-3.5 font-semibold text-white transition hover:bg-slate-800"
-            >
-              Done & Return to Site
-            </button>
+            {/* Admin Notification Status Banner */}
+            <div className="mb-4 rounded-2xl border border-blue-200 bg-blue-50/80 p-3.5 text-xs text-blue-900 flex items-start gap-2.5">
+              <span className="text-base shrink-0">🔔</span>
+              <div>
+                <strong className="block font-semibold">Admin Notification Dispatched:</strong>
+                <span>Mountain Stay Retreat front desk and manager console have been alerted to your reservation.</span>
+              </div>
+            </div>
+
+            {/* Actions: Send to WhatsApp Admin, Print Receipt, Return */}
+            <div className="space-y-2.5">
+              <a
+                href={`https://wa.me/918301995940?text=${encodeURIComponent(
+                  `🏨 *Mountain Stay Retreat - New Reservation Alert*\n\n` +
+                  `• *Booking ID:* ${bookingConfirmation.bookingId}\n` +
+                  `• *Guest Name:* ${bookingConfirmation.name}\n` +
+                  `• *Contact Number:* ${bookingConfirmation.phone}\n` +
+                  `• *Email:* ${bookingConfirmation.email}\n` +
+                  `• *Check-in Date:* ${bookingConfirmation.date}\n` +
+                  `• *Accommodation:* ${bookingConfirmation.roomType}\n` +
+                  `• *Total Due:* ₹${(bookingConfirmation.amount || 0).toLocaleString('en-IN')}\n` +
+                  `• *Payment Status:* ${bookingConfirmation.status}\n\n` +
+                  `Please confirm our room readiness. Thank you!`
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-md hover:bg-emerald-700 transition"
+              >
+                <span>💬 Send Booking Confirmation to Reception WhatsApp</span>
+              </a>
+
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-300 bg-white py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
+              >
+                <span>🖨️ Print / Save Booking Receipt</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setBookingConfirmation(null);
+                  setBookingStep(1);
+                  setAvailabilityChecked(false);
+                  setFormData({
+                    fullName: '',
+                    email: '',
+                    countryCode: '+91',
+                    phone: '',
+                    checkInDate: '',
+                    roomType: 'Suite Room (₹2,500/night)',
+                  });
+                }}
+                className="w-full rounded-2xl bg-slate-900 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+              >
+                Done & Return to Site
+              </button>
+            </div>
           </div>
         </div>
       )}

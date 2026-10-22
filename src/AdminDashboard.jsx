@@ -19,11 +19,125 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
   const [dormReason, setDormReason] = useState('');
   const [maintSaveMsg, setMaintSaveMsg] = useState('');
 
+  // Admin Notification State
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [newBookingAlert, setNewBookingAlert] = useState(null);
+
+  const playAlertChime = () => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.4);
+    } catch {
+      // Audio playback restrictions handled
+    }
+  };
+
   const fetchBookings = () => {
     fetch('http://localhost:5000/api/bookings')
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => setBookings(Array.isArray(data) ? data : []))
       .catch((err) => console.warn('Failed to fetch bookings:', err));
+  };
+
+  const fetchNotifications = async (detectNew = false) => {
+    try {
+      const res = await fetch('http://localhost:5000/api/admin/notifications');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.notifications)) {
+          if (detectNew && data.notifications.length > 0) {
+            const latest = data.notifications[0];
+            setNotifications((prev) => {
+              const prevTopId = prev[0]?.id;
+              if (latest && !latest.read && latest.id !== prevTopId) {
+                setNewBookingAlert(latest);
+                playAlertChime();
+                setTimeout(() => setNewBookingAlert(null), 8000);
+              }
+              return data.notifications;
+            });
+          } else {
+            setNotifications(data.notifications);
+          }
+          setUnreadCount(data.unreadCount || 0);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to fetch admin notifications:', err);
+    }
+  };
+
+  const handleMarkAsRead = async (id, e) => {
+    if (e) e.stopPropagation();
+    try {
+      const res = await fetch(`http://localhost:5000/api/admin/notifications/${id}/read`, {
+        method: 'PATCH',
+      });
+      if (res.ok) {
+        setNotifications((prev) =>
+          prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+        );
+        setUnreadCount((prev) => Math.max(0, prev - 1));
+      }
+    } catch (err) {
+      console.error('Failed to mark notification read:', err);
+    }
+  };
+
+  const handleMarkAllRead = async () => {
+    try {
+      const res = await fetch('http://localhost:5000/api/admin/notifications/mark-all-read', {
+        method: 'POST',
+      });
+      if (res.ok) {
+        setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+        setUnreadCount(0);
+      }
+    } catch (err) {
+      console.error('Failed to mark all read:', err);
+    }
+  };
+
+  const handleDeleteNotification = async (id, e) => {
+    if (e) e.stopPropagation();
+    try {
+      const res = await fetch(`http://localhost:5000/api/admin/notifications/${id}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        setNotifications((prev) => prev.filter((n) => n.id !== id));
+        setUnreadCount((prev) => {
+          const wasUnread = notifications.find((n) => n.id === id && !n.read);
+          return wasUnread ? Math.max(0, prev - 1) : prev;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to delete notification:', err);
+    }
+  };
+
+  const handleNotificationClick = (notif) => {
+    handleMarkAsRead(notif.id);
+    if (notif.bookingId) {
+      setSearchTerm(notif.bookingId);
+    } else if (notif.guestName) {
+      setSearchTerm(notif.guestName);
+    }
+    setIsNotifOpen(false);
   };
 
   useEffect(() => {
@@ -40,6 +154,9 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
         console.warn('Failed to fetch bookings:', err);
         if (isMounted) setLoading(false);
       });
+
+    // Initial fetch notifications
+    fetchNotifications(false);
 
     // Fetch live prices
     fetch('http://localhost:5000/api/prices')
@@ -65,8 +182,17 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
       })
       .catch((err) => console.error('Failed to fetch maintenance:', err));
 
+    // Polling interval every 8 seconds for background notification updates
+    const pollTimer = setInterval(() => {
+      if (isMounted) {
+        fetchBookings();
+        fetchNotifications(true);
+      }
+    }, 8000);
+
     return () => {
       isMounted = false;
+      clearInterval(pollTimer);
     };
   }, []);
 
@@ -151,7 +277,8 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
     const matchesSearch =
       booking.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
       booking.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      booking.email.toLowerCase().includes(searchTerm.toLowerCase());
+      booking.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (booking.phone && booking.phone.toLowerCase().includes(searchTerm.toLowerCase()));
 
     const matchesStatus =
       statusFilter === 'All' || booking.status === statusFilter;
@@ -214,8 +341,132 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Notification Bell with Badge & Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setIsNotifOpen((prev) => !prev)}
+                className={`relative flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition ${
+                  unreadCount > 0
+                    ? 'border-blue-500/60 bg-blue-900/40 text-blue-200 hover:bg-blue-900/60 shadow-lg shadow-blue-950/50'
+                    : 'border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700'
+                }`}
+                title="Admin Booking Notifications"
+              >
+                <span className="text-sm">🔔</span>
+                <span className="hidden sm:inline">Alerts</span>
+                {unreadCount > 0 && (
+                  <span className="ml-1 rounded-full bg-rose-500 px-1.5 py-0.2 text-[10px] font-extrabold text-white animate-pulse">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Notifications Dropdown Panel */}
+              {isNotifOpen && (
+                <div className="absolute right-0 mt-3 w-80 sm:w-96 rounded-3xl border border-slate-700 bg-slate-950 p-4 text-slate-100 shadow-2xl z-50">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">🔔</span>
+                      <h4 className="font-bold text-sm text-white">Booking Notifications</h4>
+                      {unreadCount > 0 && (
+                        <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-300">
+                          {unreadCount} unread
+                        </span>
+                      )}
+                    </div>
+                    {unreadCount > 0 && (
+                      <button
+                        onClick={handleMarkAllRead}
+                        className="text-[11px] font-semibold text-blue-400 hover:text-blue-300 hover:underline"
+                      >
+                        Mark all read
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="max-h-80 overflow-y-auto space-y-2 pr-1 text-xs">
+                    {notifications.length === 0 ? (
+                      <div className="py-8 text-center text-slate-500">
+                        <span className="text-2xl block mb-1">📭</span>
+                        No notifications yet.
+                      </div>
+                    ) : (
+                      notifications.map((notif) => (
+                        <div
+                          key={notif.id}
+                          onClick={() => handleNotificationClick(notif)}
+                          className={`cursor-pointer rounded-2xl border p-3 transition ${
+                            notif.read
+                              ? 'border-slate-800 bg-slate-900/60 hover:bg-slate-900'
+                              : 'border-blue-500/40 bg-blue-950/50 hover:bg-blue-950/70 shadow-sm'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-sm">
+                                {notif.roomType?.includes('Suite') ? '🛋️' : '🛏️'}
+                              </span>
+                              <span className="font-bold text-white text-xs">{notif.guestName}</span>
+                              {!notif.read && (
+                                <span className="h-2 w-2 rounded-full bg-blue-400"></span>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {notif.createdAt ? new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                            </span>
+                          </div>
+
+                          <p className="mt-1 text-[11px] text-slate-300 leading-snug">
+                            {notif.message}
+                          </p>
+
+                          <div className="mt-2.5 flex items-center justify-between border-t border-slate-800/80 pt-2 text-[10px]">
+                            <div className="flex items-center gap-2">
+                              {notif.guestPhone && (
+                                <a
+                                  href={`https://wa.me/${notif.guestPhone.replace(/\D/g, '')}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="rounded bg-emerald-500/20 px-1.5 py-0.5 font-bold text-emerald-400 hover:bg-emerald-500/30"
+                                >
+                                  WhatsApp
+                                </a>
+                              )}
+                              <span className="font-mono text-slate-400">{notif.bookingId}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              {!notif.read && (
+                                <button
+                                  onClick={(e) => handleMarkAsRead(notif.id, e)}
+                                  className="text-slate-400 hover:text-white"
+                                  title="Mark as read"
+                                >
+                                  ✓ Read
+                                </button>
+                              )}
+                              <button
+                                onClick={(e) => handleDeleteNotification(notif.id, e)}
+                                className="text-slate-500 hover:text-rose-400"
+                                title="Delete"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button
-              onClick={fetchBookings}
+              onClick={() => {
+                fetchBookings();
+                fetchNotifications(false);
+              }}
               className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 transition"
             >
               🔄 Refresh
@@ -237,6 +488,85 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
       </header>
 
       <main className="mx-auto max-w-7xl px-6 pt-8">
+        {/* Floating / Toast New Booking Alert */}
+        {newBookingAlert && (
+          <div className="fixed top-20 right-6 z-50 max-w-md animate-bounce rounded-3xl border border-emerald-500/50 bg-slate-950 p-4 shadow-2xl backdrop-blur-md">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/20 text-2xl text-emerald-400 border border-emerald-500/40">
+                🔔
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <h5 className="font-bold text-sm text-white">New Booking Received!</h5>
+                  <button
+                    onClick={() => setNewBookingAlert(null)}
+                    className="text-slate-400 hover:text-white text-xs"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-slate-300">
+                  <strong>{newBookingAlert.guestName}</strong> booked {newBookingAlert.roomType} for {newBookingAlert.checkInDate} (₹{(newBookingAlert.amount || 0).toLocaleString('en-IN')}).
+                </p>
+                <div className="mt-2.5 flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      handleNotificationClick(newBookingAlert);
+                      setNewBookingAlert(null);
+                    }}
+                    className="rounded-lg bg-emerald-600 px-3 py-1 text-[11px] font-bold text-white hover:bg-emerald-500 transition"
+                  >
+                    View in Table
+                  </button>
+                  {newBookingAlert.guestPhone && (
+                    <a
+                      href={`https://wa.me/${newBookingAlert.guestPhone.replace(/\D/g, '')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-lg bg-slate-800 px-3 py-1 text-[11px] font-semibold text-emerald-400 hover:bg-slate-700 transition"
+                    >
+                      WhatsApp Guest
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Actionable Banner for Unread Reservations */}
+        {unreadCount > 0 && (
+          <div className="mb-6 flex flex-wrap items-center justify-between rounded-3xl border border-blue-500/40 bg-gradient-to-r from-blue-950/70 via-slate-900/80 to-slate-950 p-5 shadow-xl backdrop-blur-sm">
+            <div className="flex items-center gap-3.5">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600/30 text-xl text-blue-400 border border-blue-500/40 animate-pulse">
+                🔔
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <span>{unreadCount} New Reservation Alert{unreadCount !== 1 ? 's' : ''} Received</span>
+                  <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-300 border border-blue-500/30">Action Required</span>
+                </h4>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  New guest bookings have arrived. Review reservation details and ensure room readiness.
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 flex items-center gap-2.5 sm:mt-0">
+              <button
+                onClick={() => setIsNotifOpen(true)}
+                className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-md hover:bg-blue-500 transition flex items-center gap-1.5"
+              >
+                <span>Open Notifications ({unreadCount})</span>
+              </button>
+              <button
+                onClick={handleMarkAllRead}
+                className="rounded-xl border border-slate-700 bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition"
+              >
+                Mark All Read
+              </button>
+            </div>
+          </div>
+        )}
         {/* Metric & Inventory Cards */}
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4 mb-8">
           <div className="rounded-3xl border border-slate-800 bg-slate-950/60 p-6 shadow-lg">
@@ -452,7 +782,7 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
               <span className="absolute left-4 top-3.5 text-slate-400">🔍</span>
               <input
                 type="text"
-                placeholder="Search by Guest Name, Email, or Booking ID..."
+                placeholder="Search by Guest Name, Email, Phone, or Booking ID..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full rounded-2xl border border-slate-800 bg-slate-900 py-3 pl-11 pr-4 text-sm text-white placeholder-slate-500 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
@@ -535,6 +865,21 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
                       <td className="px-6 py-4">
                         <div className="font-semibold text-white">{b.name}</div>
                         <div className="text-xs text-slate-400">{b.email}</div>
+                        {b.phone && (
+                          <div className="text-xs text-blue-400 flex items-center gap-1.5 mt-1 font-medium">
+                            <span>📞</span>
+                            <a href={`tel:${b.phone}`} className="hover:underline">{b.phone}</a>
+                            <a
+                              href={`https://wa.me/${b.phone.replace(/[^0-9]/g, '')}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Chat on WhatsApp"
+                              className="ml-1 rounded-md bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-400 hover:bg-emerald-500/30 transition"
+                            >
+                              WhatsApp
+                            </a>
+                          </div>
+                        )}
                       </td>
                       <td className="px-6 py-4 text-xs font-medium">
                         {b.roomType}
@@ -612,6 +957,12 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
                 <span className="text-slate-400">Guest Name:</span>
                 <span className="font-semibold text-slate-200">{deleteTargetBooking.name}</span>
               </div>
+              {deleteTargetBooking.phone && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Contact Number:</span>
+                  <span className="font-semibold text-slate-200">{deleteTargetBooking.phone}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-slate-400">Check-in Date:</span>
                 <span className="font-semibold text-slate-200">{deleteTargetBooking.date}</span>

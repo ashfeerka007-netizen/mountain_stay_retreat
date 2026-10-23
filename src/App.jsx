@@ -918,9 +918,24 @@ export default function StayFacilityWebsite() {
               <h4 className="mb-2 text-lg font-bold">
                 Phone
               </h4>
-              <p className="text-slate-600 font-medium">
-                +91 8301995940
-              </p>
+              <div className="space-y-1.5 font-medium text-slate-600">
+                <div>
+                  <a
+                    href="tel:+918301995940"
+                    className="hover:text-blue-600 transition"
+                  >
+                    +91 8301995940
+                  </a>
+                </div>
+                <div>
+                  <a
+                    href="tel:+917025017611"
+                    className="hover:text-blue-600 transition"
+                  >
+                    +91 7025017611
+                  </a>
+                </div>
+              </div>
             </div>
 
             <div className="rounded-3xl bg-white p-8 shadow-md text-center">
@@ -1104,7 +1119,27 @@ export default function StayFacilityWebsite() {
                 rel="noopener noreferrer"
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-md hover:bg-emerald-700 transition"
               >
-                <span>💬 Send Booking Confirmation to Reception WhatsApp</span>
+                <span>💬 WhatsApp Reception (+91 8301995940)</span>
+              </a>
+
+              <a
+                href={`https://wa.me/917025017611?text=${encodeURIComponent(
+                  `🏨 *Mountain Stay Retreat - New Reservation Alert*\n\n` +
+                  `• *Booking ID:* ${bookingConfirmation.bookingId}\n` +
+                  `• *Guest Name:* ${bookingConfirmation.name}\n` +
+                  `• *Contact Number:* ${bookingConfirmation.phone}\n` +
+                  `• *Email:* ${bookingConfirmation.email}\n` +
+                  `• *Check-in Date:* ${bookingConfirmation.date}\n` +
+                  `• *Accommodation:* ${bookingConfirmation.roomType}\n` +
+                  `• *Total Due:* ₹${(bookingConfirmation.amount || 0).toLocaleString('en-IN')}\n` +
+                  `• *Payment Status:* ${bookingConfirmation.status}\n\n` +
+                  `Please confirm our room readiness. Thank you!`
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex w-full items-center justify-center gap-2 rounded-2xl border border-emerald-600 bg-emerald-50 py-2.5 text-sm font-bold text-emerald-800 shadow-sm hover:bg-emerald-100 transition"
+              >
+                <span>💬 WhatsApp Reception (+91 7025017611)</span>
               </a>
 
               <button

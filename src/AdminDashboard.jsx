@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 export default function AdminDashboard({ onSwitchToSite, onLogout }) {
   const [bookings, setBookings] = useState([]);
@@ -25,7 +25,7 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [newBookingAlert, setNewBookingAlert] = useState(null);
 
-  const playAlertChime = () => {
+  const playAlertChime = useCallback(() => {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtx) return;
@@ -44,16 +44,16 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
     } catch {
       // Audio playback restrictions handled
     }
-  };
+  }, []);
 
-  const fetchBookings = () => {
+  const fetchBookings = useCallback(() => {
     fetch('http://localhost:5000/api/bookings')
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => setBookings(Array.isArray(data) ? data : []))
       .catch((err) => console.warn('Failed to fetch bookings:', err));
-  };
+  }, []);
 
-  const fetchNotifications = async (detectNew = false) => {
+  const fetchNotifications = useCallback(async (detectNew = false) => {
     try {
       const res = await fetch('http://localhost:5000/api/admin/notifications');
       if (res.ok) {
@@ -79,7 +79,7 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
     } catch (err) {
       console.warn('Failed to fetch admin notifications:', err);
     }
-  };
+  }, [playAlertChime]);
 
   const handleMarkAsRead = async (id, e) => {
     if (e) e.stopPropagation();
@@ -156,7 +156,15 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
       });
 
     // Initial fetch notifications
-    fetchNotifications(false);
+    fetch('http://localhost:5000/api/admin/notifications')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (isMounted && data && Array.isArray(data.notifications)) {
+          setNotifications(data.notifications);
+          setUnreadCount(data.unreadCount || 0);
+        }
+      })
+      .catch((err) => console.warn('Failed to fetch admin notifications:', err));
 
     // Fetch live prices
     fetch('http://localhost:5000/api/prices')
@@ -194,7 +202,7 @@ export default function AdminDashboard({ onSwitchToSite, onLogout }) {
       isMounted = false;
       clearInterval(pollTimer);
     };
-  }, []);
+  }, [fetchBookings, fetchNotifications]);
 
   const handleSavePrices = async (e) => {
     e.preventDefault();

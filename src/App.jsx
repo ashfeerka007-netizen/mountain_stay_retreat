@@ -63,7 +63,6 @@ export default function StayFacilityWebsite() {
   const [bookingStep, setBookingStep] = useState(1); // 1: Check Availability, 2: Guest Details & Payment Method
   const [availabilityChecked, setAvailabilityChecked] = useState(false);
   const [checkingAvailability, setCheckingAvailability] = useState(false);
-  const [paymentOption, setPaymentOption] = useState('counter'); // 'online' | 'counter'
   const [formData, setFormData] = useState({
     fullName: '',
     email: '',
@@ -155,16 +154,6 @@ export default function StayFacilityWebsite() {
   const handleResetStep = () => {
     setBookingStep(1);
     setAvailabilityChecked(false);
-  };
-
-  const saveOnlineBookingToBackend = (bookingData) => {
-    fetch('http://localhost:5000/api/confirm-online-booking', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(bookingData),
-    })
-      .then(() => fetchAvailability(formData.checkInDate))
-      .catch((err) => console.error('Failed to sync booking to backend:', err));
   };
 
   const selectedAvailableCount = formData.roomType.includes('Suite')

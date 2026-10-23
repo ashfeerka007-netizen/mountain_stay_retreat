@@ -11,14 +11,22 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
+!Server/.env.example
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
